@@ -4,3 +4,7 @@ dist/
 naming.db
 npm-debug.log*
 *.tsbuildinfo
+
+# Storage server chunk data (written at runtime)
+data/
+data-*/
