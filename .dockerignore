@@ -1,0 +1,27 @@
+# Keep build contexts small and reproducible. Each Dockerfile copies only the
+# paths it needs, so this is mostly belt-and-suspenders — but it also stops a
+# local node_modules / *.db / chunk data dir from busting the build cache.
+.git
+.gitignore
+node_modules
+**/node_modules
+dist
+*.tsbuildinfo
+npm-debug.log*
+
+# Runtime state — never bake into an image.
+*.db
+naming.db
+data
+data-*
+**/data
+
+# Tests and tooling aren't needed at runtime.
+test
+**/*.test.ts
+.prettierrc
+.prettierignore
+
+# Docs / compose don't belong inside the images.
+SETUP.md
+docker-compose.yml

@@ -1,0 +1,163 @@
+# Distributed File System — full stack.
+#
+#   docker compose up --build -d      # naming + 3 storage servers
+#   docker compose run --rm client create /files/report.txt report.txt
+#
+# Services resolve each other by name on the `dfs` user-defined bridge network.
+# The client is in the `client` profile, so `up` does NOT start it (a CLI is not
+# a daemon) — invoke it on demand (see SETUP.md).
+
+services:
+  # ── Naming server: source of truth for metadata only ─────────────────────
+  naming-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dfs-naming
+    environment:
+      PORT: "8000"
+      NAMING_DB_PATH: /data/naming.db
+    volumes:
+      - naming-data:/data
+    ports:
+      - "8000:8000" # exposed to host for debugging (GET /health); optional
+    networks: [dfs]
+    healthcheck:
+      # Node 24 has a global fetch and curl is absent from the slim image.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # ── Storage servers: chunk bytes on disk, one named volume each ──────────
+  # Same image for all three; only SELF_ADDRESS + the volume differ.
+  storage-1:
+    build:
+      context: .
+      dockerfile: storage-server/Dockerfile
+    image: dfs-storage # built once, reused by storage-2 / storage-3
+    environment:
+      PORT: "8001"
+      DATA_DIR: /data
+      SELF_ADDRESS: storage-1:8001 # how others reach THIS server for chunks
+      NAMING_SERVER_URL: http://naming-server:8000
+      HEARTBEAT_SECONDS: "15"
+    volumes:
+      - storage-1-data:/data
+    depends_on:
+      naming-server:
+        condition: service_healthy
+    networks: [dfs]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  storage-2:
+    image: dfs-storage
+    build:
+      context: .
+      dockerfile: storage-server/Dockerfile
+    environment:
+      PORT: "8001"
+      DATA_DIR: /data
+      SELF_ADDRESS: storage-2:8001
+      NAMING_SERVER_URL: http://naming-server:8000
+      HEARTBEAT_SECONDS: "15"
+    volumes:
+      - storage-2-data:/data
+    depends_on:
+      naming-server:
+        condition: service_healthy
+    networks: [dfs]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  storage-3:
+    image: dfs-storage
+    build:
+      context: .
+      dockerfile: storage-server/Dockerfile
+    environment:
+      PORT: "8001"
+      DATA_DIR: /data
+      SELF_ADDRESS: storage-3:8001
+      NAMING_SERVER_URL: http://naming-server:8000
+      HEARTBEAT_SECONDS: "15"
+    volumes:
+      - storage-3-data:/data
+    depends_on:
+      naming-server:
+        condition: service_healthy
+    networks: [dfs]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # ── Client: a CLI, not a daemon. In the `client` profile so `up` skips it ─
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    image: dfs-client
+    profiles: ["client"]
+    environment:
+      # client/dfs.ts reads NAMING_URL (not NAMING_SERVER_URL).
+      NAMING_URL: http://naming-server:8000
+    volumes:
+      # Drop host files here to `create` them; `read <name> /files/out` lands here.
+      - ./shared:/files
+    depends_on:
+      naming-server:
+        condition: service_healthy
+      storage-1:
+        condition: service_healthy
+      storage-2:
+        condition: service_healthy
+      storage-3:
+        condition: service_healthy
+    networks: [dfs]
+
+networks:
+  dfs:
+    driver: bridge
+
+volumes:
+  naming-data:
+  storage-1-data:
+  storage-2-data:
+  storage-3-data:
