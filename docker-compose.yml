@@ -128,6 +128,28 @@ services:
       retries: 12
       start_period: 5s
 
+  # ── Demo web UI: drives the client over HTTP, visualises chunk placement ──
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: dfs-web
+    environment:
+      PORT: "3000"
+      NAMING_URL: http://naming-server:8000
+    ports:
+      - "3000:3000" # open http://localhost:3000
+    depends_on:
+      naming-server:
+        condition: service_healthy
+      storage-1:
+        condition: service_healthy
+      storage-2:
+        condition: service_healthy
+      storage-3:
+        condition: service_healthy
+    networks: [dfs]
+
   # ── Client: a CLI, not a daemon. In the `client` profile so `up` skips it ─
   client:
     build:
