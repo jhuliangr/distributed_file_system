@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DFS Demo</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { margin-bottom: 0; }
+  .sub { color: #888; margin-top: .2rem; }
+  section { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  label { display: block; font-weight: 600; margin: .5rem 0 .2rem; }
+  input, textarea, button { font: inherit; }
+  input, textarea { width: 100%; box-sizing: border-box; padding: .4rem; border-radius: 6px; border: 1px solid #8886; }
+  textarea { min-height: 6rem; }
+  button { padding: .4rem .9rem; border-radius: 6px; border: 1px solid #8886; cursor: pointer; background: #4f46e5; color: #fff; }
+  button.ghost { background: transparent; color: inherit; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; }
+  .servers { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .pill { padding: .2rem .6rem; border-radius: 999px; font-size: .85rem; border: 1px solid #8886; }
+  .alive { background: #16a34a22; border-color: #16a34a; }
+  .dead { background: #dc262622; border-color: #dc2626; opacity: .7; }
+  pre { background: #8881; padding: .6rem; border-radius: 6px; overflow: auto; white-space: pre-wrap; }
+  .chunk { border: 1px solid #8884; border-radius: 6px; padding: .4rem .6rem; margin: .3rem 0; }
+  .chunk b { font-family: monospace; }
+  #out { min-height: 1.2rem; color: #888; }
+</style>
+</head>
+<body>
+<h1>Distributed File System</h1>
+<p class="sub">Chunked · replicated · fault-tolerant. Files split into 1024-byte chunks, each stored on ≥2 storage servers.</p>
+
+<section>
+  <div class="row" style="justify-content: space-between">
+    <strong>Storage servers</strong>
+    <button class="ghost" onclick="loadServers()">↻ refresh</button>
+  </div>
+  <div class="servers" id="servers">…</div>
+</section>
+
+<section>
+  <strong>Create a file</strong>
+  <label>Name</label>
+  <input id="cname" placeholder="report.txt" />
+  <label>Content</label>
+  <textarea id="ccontent" placeholder="Type anything. Over 1024 bytes to see multiple chunks."></textarea>
+  <div class="row"><button onclick="createFile()">Create &amp; replicate</button></div>
+</section>
+
+<section>
+  <strong>Inspect / operate</strong>
+  <div class="row">
+    <input id="qname" placeholder="report.txt" style="flex:1; min-width: 12rem" />
+    <button onclick="inspect()">Chunk map</button>
+    <button class="ghost" onclick="readFile()">Read</button>
+    <button class="ghost" onclick="sizeFile()">Size</button>
+    <button class="ghost" style="border-color:#dc2626;color:#dc2626" onclick="del()">Delete</button>
+  </div>
+  <div id="out"></div>
+  <div id="result"></div>
+</section>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const say = (m, err) => { const o = $('out'); o.textContent = m; o.style.color = err ? '#dc2626' : '#888'; };
+
+async function api(path, opts) {
+  const r = await fetch('/api' + path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
+
+async function loadServers() {
+  try {
+    const { servers } = await api('/storage');
+    // The naming server's `alive` flag is event-driven: it only flips to dead
+    // when a client reports a failed transfer, so a silently-stopped server
+    // still reads alive. Trust last_seen instead — heartbeat is 15s, so a gap
+    // over 45s means the server is effectively dead.
+    // ponytail: client-side staleness; move to a server-side sweeper if other
+    // consumers (the CLI client) need the same truth.
+    const STALE_MS = 45_000;
+    const live = (s) => s.alive && Date.now() - new Date(s.last_seen).getTime() < STALE_MS;
+    $('servers').innerHTML = servers.map((s) =>
+      `<span class="pill ${live(s) ? 'alive' : 'dead'}">${s.address} · ${live(s) ? 'alive' : 'stale/dead'}</span>`
+    ).join('') || '<i>none registered</i>';
+  } catch (e) { say(e.message, true); }
+}
+
+async function createFile() {
+  const name = $('cname').value.trim();
+  const content = $('ccontent').value;
+  if (!name) return say('name required', true);
+  say('replicating…');
+  try {
+    await api('/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, content }) });
+    say(`created ${name}`);
+    $('qname').value = name;
+    inspect();
+  } catch (e) { say(e.message, true); }
+}
+
+async function inspect() {
+  const name = $('qname').value.trim();
+  if (!name) return say('name required', true);
+  try {
+    const f = await api('/files/' + encodeURIComponent(name));
+    say(`${f.name} — ${f.size} bytes, ${f.num_chunks} chunk(s)`);
+    $('result').innerHTML = f.chunks.map((c) =>
+      `<div class="chunk"><b>chunk ${c.index}</b> · id ${c.chunk_id.slice(0, 8)}… → ${c.replicas.map((r) => `<span class="pill alive">${r}</span>`).join(' ')}</div>`
+    ).join('');
+  } catch (e) { say(e.message, true); $('result').innerHTML = ''; }
+}
+
+async function readFile() {
+  const name = $('qname').value.trim();
+  try {
+    const r = await fetch('/api/files/' + encodeURIComponent(name) + '/content');
+    if (!r.ok) throw new Error((await r.json()).error);
+    $('result').innerHTML = '<pre></pre>';
+    $('result').firstChild.textContent = await r.text();
+    say(`read ${name}`);
+  } catch (e) { say(e.message, true); }
+}
+
+async function sizeFile() {
+  const name = $('qname').value.trim();
+  try { const { size } = await api('/files/' + encodeURIComponent(name) + '/size'); say(`${name}: ${size} bytes`); }
+  catch (e) { say(e.message, true); }
+}
+
+async function del() {
+  const name = $('qname').value.trim();
+  if (!confirm('Delete ' + name + '?')) return;
+  try { await api('/files/' + encodeURIComponent(name), { method: 'DELETE' }); say(`deleted ${name}`); $('result').innerHTML = ''; }
+  catch (e) { say(e.message, true); }
+}
+
+loadServers();
+</script>
+</body>
+</html>
