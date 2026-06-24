@@ -22,8 +22,11 @@ No functional bugs found in this test run.
 ## Evidence
 
 - Test suite: `npm test`
-- Result: 25 passed, 0 failed
-- Relevant suite: `test/e2e.integration.test.ts`
+- Result: 29 passed, 0 failed
+- Relevant suites:
+  - `test/e2e.client.integration.test.ts`
+  - `test/e2e.naming.integration.test.ts`
+  - `test/e2e.storage.integration.test.ts`
 
 ## Notes
 
